@@ -1,0 +1,14 @@
+node_modules
+dist
+dist-web
+dist-electron
+dist_old
+release
+build
+.env
+.DS_Store
+*.log
+asar_contents.txt
+build_error.txt
+build_output.txt
+NSWPedia-source.json

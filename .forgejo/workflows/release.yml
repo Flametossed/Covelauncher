@@ -1,0 +1,83 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-and-release:
+    runs-on: codeberg-medium
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y squashfs-tools wine wine32:i386 xvfb
+          Xvfb :99 -screen 0 1024x768x24 &
+          echo "DISPLAY=:99" >> $GITHUB_ENV
+
+      - name: Install project dependencies
+        run: npm ci
+
+      - name: Build frontend and electron
+        run: npm run build
+
+      - name: Build Linux packages (AppImage + tar.gz)
+        run: npx electron-builder --linux AppImage tar.gz --publish never
+
+      - name: Build Windows package (portable exe)
+        run: npx electron-builder --win portable --publish never
+
+      - name: List release artifacts
+        run: ls -la release/
+
+      - name: Create Release and Upload Assets
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+
+          # Create the release
+          RELEASE_RESPONSE=$(curl -s -X POST \
+            -H "Authorization: token ${{ secrets.RELEASE_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"tag_name\": \"${TAG}\",
+              \"name\": \"CoveLauncher ${TAG}\",
+              \"body\": \"## CoveLauncher ${TAG}\n\nA modern, lightweight Game Library Manager.\n\n### Downloads\n- **Windows**: Download the \`.exe\` file (portable — no installation needed)\n- **Linux AppImage**: Download the \`.AppImage\` file, then \`chmod +x\` and run\n- **Linux tar.gz**: Download and extract, then run the \`covelauncher\` binary\",
+              \"draft\": false,
+              \"prerelease\": false
+            }" \
+            "https://codeberg.org/api/v1/repos/${{ github.repository }}/releases")
+
+          RELEASE_ID=$(echo "$RELEASE_RESPONSE" | jq -r '.id')
+          echo "Created release ID: $RELEASE_ID"
+
+          if [ "$RELEASE_ID" = "null" ] || [ -z "$RELEASE_ID" ]; then
+            echo "Failed to create release!"
+            echo "$RELEASE_RESPONSE"
+            exit 1
+          fi
+
+          # Upload each artifact
+          for file in release/*.exe release/*.AppImage release/*.tar.gz; do
+            if [ -f "$file" ]; then
+              FILENAME=$(basename "$file")
+              echo "Uploading: $FILENAME"
+              curl -s -X POST \
+                -H "Authorization: token ${{ secrets.RELEASE_TOKEN }}" \
+                -H "Content-Type: application/octet-stream" \
+                --data-binary "@$file" \
+                "https://codeberg.org/api/v1/repos/${{ github.repository }}/releases/${RELEASE_ID}/assets?name=$(echo $FILENAME | sed 's/ /%20/g')"
+              echo "  ✓ Uploaded $FILENAME"
+            fi
+          done

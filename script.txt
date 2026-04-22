@@ -1,0 +1,366 @@
+#!/usr/bin/env bash
+#######################################
+## Nintendo Switch Direct Downloader ##
+## by Propagandalf              v1.1 ##
+#######################################
+set -euo pipefail
+trap cleanup EXIT
+
+# You can edit these
+DEFAULT_OUTPUT_FOLDER="/home/$USER/Downloads/switch"
+DEFAULT_CREATE_SUB_DIR=0
+DEFAULT_EXTRACT_ARCHIVE=1
+
+# Do not touch
+SCRIPT_NAME="$(basename "$0")"
+REQUIRED_TOOLS=("gum" "htmlq" "wget" "unrar" "unzip" "sed" "tr" "find" "realpath")
+SEARCH=""
+DIRECTORY=""
+SEL_GAME=""
+
+usage() {
+    cat <<EOF
+Usage: $SCRIPT_NAME [OPTIONS]
+
+Download Switch Roms ultrafast from https://nswpedia.com/
+using their direct download links.
+
+Options:
+  -s, --search <query>   Search for a game
+  -d, --directory <dir>  Directory to download to
+  -n, --no-extract       Do not automatically extract archive
+  -c, --create-subdir    Creates a subdirectory for the game
+  -h, --help             Show this help message
+
+Examples:
+  $SCRIPT_NAME -s "zelda"
+  $SCRIPT_NAME -s "mario" -d "~/roms" -n
+  $SCRIPT_NAME -s "metroid" -d . -c
+
+Notes:
+  Default directory is "$DEFAULT_OUTPUT_FOLDER"
+  Required tools that needs to be in your PATH:
+  gum, htmlq, wget, unrar, unzip, sed, tr, find, realpath
+EOF
+}
+
+intro_text() {
+    gum style \
+        --foreground 2 --border-foreground 0 --border rounded \
+        --align center --width 35 --margin "0 0" --padding "0 0" \
+        'Nintendo Switch Rom Downloader' '¯\_(ツ)_/¯'
+}
+
+error_msg() {
+    local TXT=$1
+    local PREFIX=${2:-"Error:"}
+
+    printf "%s %s\n" \
+        "$(gum style --foreground 1 --bold "$PREFIX")" \
+        "$TXT"
+}
+
+cleanup() {
+    EXIT_CODE=$?
+    if [[ $EXIT_CODE -eq 130 ]]; then
+        error_msg "Cancelled by user..."
+        exit 1
+    fi
+    exit 0
+}
+
+extract_file() {
+    local FILE="$1"
+
+    if (( DEFAULT_EXTRACT_ARCHIVE )) && [[ "$FILE" == *.rar ]]; then
+        gum spin --title "Extracting archive..." \
+            --spinner.foreground="3" \
+            --title.foreground="15" \
+            -s "minidot" \
+            -- \
+            unrar x -o+ "$FILE" "$(dirname "$FILE")"
+        rm "$FILE"
+        printf "%s %s\n" \
+            "$(gum style --foreground 2 --bold "Extraction:")" "OK"
+
+    elif (( DEFAULT_EXTRACT_ARCHIVE )) && [[ "$FILE" == *.zip ]]; then
+        gum spin --title "Extracting archive..." \
+            --spinner.foreground="3" \
+            --title.foreground="15" \
+            -s "minidot" \
+            -- \
+            unzip -o "$FILE" -d "$(dirname "$FILE")"
+        rm "$FILE"
+        printf "%s %s\n" \
+            "$(gum style --foreground 2 --bold "Extraction:")" "OK"
+    fi
+}
+
+get_direct_download_link() {
+    local URL=$1
+    DOWNLOAD_URL=$(gum spin --title "Fetching data..." \
+        --spinner.foreground="3" \
+        --title.foreground="15" \
+        -s "minidot" \
+        -- \
+        curl -s "$URL" | htmlq -a href 'a#download-link')
+}
+
+download_file() {
+    local URL="$1"
+    local REFERER="$2"
+    local OPTION_NAME="$3"
+    local CURRENT_INDEX="$4"
+    local MAX_INDEX="$5"
+
+    local TMP_DIR=$(mktemp -d)
+
+    printf "%s %s\n" \
+        "$(gum style --foreground 3 --bold "[$CURRENT_INDEX/$MAX_INDEX] Downloading:")" \
+        "$OPTION_NAME"
+
+    wget -q \
+        --show-progress \
+        --trust-server-names \
+        --content-disposition \
+        -P "$TMP_DIR" \
+        "$URL" \
+        --referer="$REFERER"
+
+    printf '\e[1A\e[2K\e[1A\e[2K'
+
+    local DOWNLOADED_PATH=$(find "$TMP_DIR" -maxdepth 1 -type f)
+    FILE_NAME=$(basename "$DOWNLOADED_PATH")
+
+    mv "$DOWNLOADED_PATH" "$DIRECTORY/"
+    rmdir "$TMP_DIR"
+
+    printf "%s %s\n" \
+        "$(gum style --foreground 2 --bold "Downloaded:")" \
+        "$FILE_NAME"
+}
+
+select_versions_to_download() {
+    local URL=$1
+
+    NEXT_URL=$(gum spin --title "Fetching data..." \
+        --spinner.foreground="3" \
+        --title.foreground="15" \
+        -s "minidot" \
+        -- \
+        curl -s "$URL" | htmlq -a href 'a.green')
+
+    TABLES=$(gum spin --title "Fetching data..." \
+        --spinner.foreground="3" \
+        --title.foreground="15" \
+        -s "minidot" \
+        -- \
+        curl -s "$NEXT_URL")
+
+    DIRECT_DOWNLOAD=$(echo "$TABLES" | htmlq '.table-download' -r '.table-download ~ .table-download')
+
+    if ! echo "$DIRECT_DOWNLOAD" | grep -q "Downloads List- Direct"; then
+        error_msg "Direct link not found..."
+        error_msg "$1" "URL:"
+        exit 1
+    fi
+
+    mapfile -t URLS < <(
+        printf '%s' "$DIRECT_DOWNLOAD" |
+        htmlq 'tbody tr td:nth-child(1) a' -a href |
+        sed 's/[[:space:]]*$//'
+    )
+
+    mapfile -t NAMES < <(
+        printf '%s' "$DIRECT_DOWNLOAD" |
+        htmlq 'tbody tr td:nth-child(1) a' --text |
+        sed 's/[[:space:]]*$//'
+    )
+
+    mapfile -t SIZES < <(
+        printf '%s' "$DIRECT_DOWNLOAD" |
+        htmlq 'tbody tr td:nth-child(2)' --text |
+        sed 's/[[:space:]]*$//'
+    )
+
+    mapfile -t FORMATS < <(
+        printf '%s' "$DIRECT_DOWNLOAD" |
+        htmlq 'tbody tr td:nth-child(3)' --text |
+        sed 's/[[:space:]]*$//' |
+        tr '[:lower:]' '[:upper:]'
+    )
+
+    OPTIONS=()
+    for i in "${!NAMES[@]}"; do
+        if [[ -n "${URLS[$i]}" ]]; then
+            OPTIONS+=("[${FORMATS[$i]}] ${NAMES[$i]} - ${SIZES[$i]}")
+        fi
+    done
+
+    RAW_CHOICES=$(printf "%s\n" "${OPTIONS[@]}" | gum choose \
+        --header="Press [space] to select item(s):" \
+        --no-show-help \
+        --cursor="▶ " \
+        --item.foreground="15" \
+        --cursor.foreground="3" \
+        --selected.foreground="2" \
+        --header.foreground="4" \
+        --no-limit)
+
+    STATUS=$?
+
+    if [[ "$STATUS" -eq 130 ]]; then
+        error_msg "Cancelled by user..."
+        exit 1
+    fi
+    if [[ -z "$RAW_CHOICES" ]]; then
+        error_msg "No items selected..."
+        exit 1
+    fi
+
+    mapfile -t CHOICES <<< "$RAW_CHOICES"
+
+    for CHOICE in "${CHOICES[@]}"; do
+        for i in "${!OPTIONS[@]}"; do
+            if [[ "${OPTIONS[$i]}" == "$CHOICE" ]]; then
+                GRAB_DIRECT_URL+=("${URLS[$i]}")
+                GRAB_OPTIONS+=("${OPTIONS[$i]}")
+                break
+            fi
+        done
+    done
+}
+
+search_for_rom() {
+    local SEARCH_STRING="$1"
+
+    SEARCH_URL="https://nswpedia.com/?s="
+    ENCODED_SEARCH_URL=$SEARCH_URL${SEARCH_STRING// /+}
+    CONTENT=$(gum spin --title "Fetching data..." \
+        --spinner.foreground="3" \
+        --title.foreground="15" \
+        -s "minidot" \
+        -- \
+        curl -s "$ENCODED_SEARCH_URL" | htmlq '#dle-content')
+
+    mapfile -t TITLES < <(printf '%s' "$CONTENT" | htmlq --text '.soft-item-title')
+    mapfile -t LINKS  < <(printf '%s' "$CONTENT" | htmlq -a href 'a.link-title')
+
+    if [[ ${#TITLES[@]} -eq 0 ]]; then
+        printf "%s %s\n" \
+            "$(gum style --foreground 1 --bold "No results for:")" \
+            "${SEARCH_STRING}"
+        exit 1
+    fi
+
+    SELECTED_GAME=$(printf "%s\n" "${TITLES[@]}" | gum choose \
+        --no-show-help \
+        --header="" \
+        --cursor="▶ " \
+        --item.foreground="15" \
+        --cursor.foreground="3" \
+        --select-if-one)
+
+    for i in "${!TITLES[@]}"; do
+      if [[ "${TITLES[$i]}" == "$SELECTED_GAME" ]]; then
+        printf "%s %s\n" \
+            "$(gum style --foreground 2 --bold "Game:")" \
+            "${TITLES[$i]}"
+        GAME_URL=${LINKS[$i]}
+        SEL_GAME="${TITLES[$i]}"
+        break
+      fi
+    done
+}
+
+prompt_for_search() {
+    SEARCH=$(gum input \
+        --placeholder "Search game..." \
+        --no-show-help \
+        --prompt="↳ " \
+        --prompt.foreground="2" \
+        --cursor.foreground="0")
+    if [[ -z "$SEARCH" ]]; then
+        error_msg "No search prompt provided..."
+        exit 1
+    fi
+}
+
+download_complete() {
+    printf "%s\n" "$(gum style --foreground 2 --bold "Done!")"
+}
+
+check_dependencies() {
+    local SHOULD_EXIT=0
+    for tool in "${REQUIRED_TOOLS[@]}"; do
+        if ! command -v "$tool" &> /dev/null; then
+            SHOULD_EXIT=1
+            printf "\033[31mMissing dependency:\033[0m $tool not found\n"
+        fi
+    done
+    if (( SHOULD_EXIT )); then
+        exit 1
+    fi
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -s|--search)
+      [[ $# -lt 2 ]] && { error_msg "-s requires a value"; exit 1; }
+      SEARCH="$2"
+      shift 2
+      ;;
+    -d|--directory)
+      [[ $# -lt 2 ]] && { error_msg "-d requires a value"; exit 1; }
+      TMP_PATH="${2/#\~/$HOME}"
+      DIRECTORY="$(realpath -m "$TMP_PATH")"
+      shift 2
+      ;;
+    -n|--no-extract)
+      DEFAULT_EXTRACT_ARCHIVE=0
+      shift
+      ;;
+    -c|--create-subdir)
+      DEFAULT_CREATE_SUB_DIR=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      error_msg "$1" "Unknown option:"
+      echo
+      usage
+      exit 1
+      ;;
+  esac
+done
+
+# Run script
+check_dependencies
+intro_text
+if [[ -z "$SEARCH" ]]; then
+    prompt_for_search
+fi
+search_for_rom "$SEARCH"
+select_versions_to_download "$GAME_URL"
+if [[ -z "$DIRECTORY" ]]; then
+    DIRECTORY=$DEFAULT_OUTPUT_FOLDER
+fi
+if (( DEFAULT_CREATE_SUB_DIR )); then
+    DIRECTORY="$DIRECTORY/$SEL_GAME"
+fi
+mkdir -p "$DIRECTORY"
+for i in "${!GRAB_DIRECT_URL[@]}"; do
+    IDX=$((i + 1))
+    get_direct_download_link "${GRAB_DIRECT_URL[$i]}"
+    download_file \
+        "$DOWNLOAD_URL" \
+        "$GRAB_DIRECT_URL" \
+        "${GRAB_OPTIONS[$i]}" \
+        "$IDX" \
+        "${#GRAB_DIRECT_URL[@]}"
+    extract_file "$DIRECTORY/$FILE_NAME"
+done
+download_complete
