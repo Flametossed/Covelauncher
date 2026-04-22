@@ -252,10 +252,12 @@ ipcMain.handle('get-firmware-releases', async () => {
 ipcMain.handle('get-prod-keys', async () => {
   const axios = await import('axios');
   const cheerio = await import('cheerio');
+  const https = await import('https');
   const response = await axios.default.get('https://prodkeys.net/ryujinx-prod-keys-update/', {
     headers: {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    }
+    },
+    httpsAgent: new https.Agent({ rejectUnauthorized: false })
   });
   const $ = cheerio.load(response.data);
 

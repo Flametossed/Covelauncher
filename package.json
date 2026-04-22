@@ -26,7 +26,12 @@
     "files": [
       "dist-web/**/*",
       "dist-electron/**/*",
-      "package.json"
+      "package.json",
+      "!NSWPedia-source.json",
+      "!src/**/*",
+      "!electron/**/*",
+      "!*.ts",
+      "!*.md"
     ],
     "appId": "com.covelauncher.app",
     "mac": {
