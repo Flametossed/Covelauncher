@@ -509,7 +509,7 @@ function App() {
     const contentType = detectContentType(option.name);
     setDownloads(prev => ({
       ...prev,
-      [id]: { id, loaded: 0, total: 0, percentage: 0, status: 'downloading', fileName: option.name, contentType, optionName: option.name }
+      [id]: { id, loaded: 0, total: 0, percentage: 0, status: 'downloading', fileName: option.name, contentType, optionName: option.url }
     }));
     try {
       const directLink = await window.electronAPI.getDirectDownloadLink(option.url);
@@ -1063,7 +1063,7 @@ function App() {
                     Available Downloads
                   </h3>
                   {options.map((opt, i) => {
-                    const alreadyDownloaded = downloadedNames.has(opt.name);
+                    const alreadyDownloaded = downloadedNames.has(opt.url);
                     return (
                     <div key={i} className={`flex flex-col sm:flex-row items-start sm:items-center justify-between p-4
                                             border rounded-xl transition-colors gap-4 ${
