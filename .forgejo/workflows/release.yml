@@ -6,8 +6,8 @@ on:
       - 'v*'
 
 jobs:
-  build-and-release:
-    runs-on: codeberg-medium
+  build-linux:
+    runs-on: codeberg-medium-lazy
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -18,12 +18,45 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
+          cache: 'npm'
 
-      - name: Install Linux build dependencies
+      - name: Install project dependencies
+        run: npm ci
+
+      - name: Build frontend and electron
+        run: npm run build
+
+      - name: Build Linux packages
+        run: npx electron-builder --linux AppImage tar.gz --publish never
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-artifacts
+          path: |
+            release/*.AppImage
+            release/*.tar.gz
+          retention-days: 1
+
+  build-windows:
+    runs-on: codeberg-medium-lazy
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install wine for Windows cross-build
         run: |
           sudo dpkg --add-architecture i386
-          sudo apt-get update
-          sudo apt-get install -y squashfs-tools wine wine32:i386 xvfb
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends wine wine32:i386 xvfb
           Xvfb :99 -screen 0 1024x768x24 &
           echo "DISPLAY=:99" >> $GITHUB_ENV
 
@@ -33,20 +66,29 @@ jobs:
       - name: Build frontend and electron
         run: npm run build
 
-      - name: Build Linux packages (AppImage + tar.gz)
-        run: npx electron-builder --linux AppImage tar.gz --publish never
-
-      - name: Build Windows package (portable exe)
+      - name: Build Windows package
         run: npx electron-builder --win portable --publish never
 
-      - name: List release artifacts
-        run: ls -la release/
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-artifacts
+          path: release/*.exe
+          retention-days: 1
+
+  release:
+    needs: [build-linux, build-windows]
+    runs-on: codeberg-tiny
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
 
       - name: Create Release and Upload Assets
         run: |
           TAG=${GITHUB_REF#refs/tags/}
 
-          # Create the release
           RELEASE_RESPONSE=$(curl -s -X POST \
             -H "Authorization: token ${{ secrets.RELEASE_TOKEN }}" \
             -H "Content-Type: application/json" \
@@ -68,8 +110,7 @@ jobs:
             exit 1
           fi
 
-          # Upload each artifact
-          for file in release/*.exe release/*.AppImage release/*.tar.gz; do
+          for file in artifacts/**/*.exe artifacts/**/*.AppImage artifacts/**/*.tar.gz; do
             if [ -f "$file" ]; then
               FILENAME=$(basename "$file")
               echo "Uploading: $FILENAME"
@@ -78,6 +119,6 @@ jobs:
                 -H "Content-Type: application/octet-stream" \
                 --data-binary "@$file" \
                 "https://codeberg.org/api/v1/repos/${{ github.repository }}/releases/${RELEASE_ID}/assets?name=$(echo $FILENAME | sed 's/ /%20/g')"
-              echo "  ✓ Uploaded $FILENAME"
+              echo "  Uploaded $FILENAME"
             fi
           done
