@@ -51,43 +51,7 @@ export interface AppConfig {
 }
 
 const DEFAULT_CONFIG: AppConfig = {
-  sources: [
-    {
-      id: 'nswpedia',
-      name: 'NSWPedia',
-      baseUrl: 'https://nswpedia.com',
-      enabled: true,
-      selectors: {
-        gameList: '#dle-content .soft-item',
-        gameTitle: '.soft-item-title',
-        gameLink: 'a.link-title',
-        gameImage: 'img',
-        downloadButton: 'a.green',
-        downloadTable: '.table-download',
-        downloadRow: 'tbody tr',
-        downloadName: 'td:nth-child(1) a',
-        downloadUrl: 'td:nth-child(1) a',
-        downloadSize: 'td:nth-child(2)',
-        downloadFormat: 'td:nth-child(3)',
-        directDownloadLink: 'a#download-link',
-        coverImage: [
-          'meta[property="og:image"]',
-          '.fullimage img',
-          '.game-cover img',
-          '.post-image img',
-          '.short-story-image img',
-          '.cover img',
-          '.poster img',
-          '#dle-content img'
-        ]
-      },
-      paths: {
-        search: '/?s=',
-        latest: '/category/nintendo-switch-roms/',
-        popular: '/nintendo-switch-roms?orderby=popular'
-      }
-    }
-  ],
+  sources: [],
   firmwareSources: [],
   emulators: []
 };
