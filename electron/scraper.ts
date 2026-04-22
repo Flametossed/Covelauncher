@@ -3,6 +3,10 @@ import * as cheerio from 'cheerio';
 import fs from 'fs';
 import { getEnabledSources, SourceConfig } from './sources';
 import { searchMods, getModDownloadOptions } from './github-mods';
+import {
+  getMediaFireFolderFiles, getUniqueGameTitles, searchMediaFireFiles,
+  getFilesForGame, detectSaveFormat, formatMediaFireSize, getMediaFireDirectLink
+} from './mediafire';
 
 export interface GameResult {
   title: string;
@@ -62,9 +66,22 @@ async function scrapeGameList(url: string, source: SourceConfig, limit = 16): Pr
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
+async function getMediaFireGameList(source: SourceConfig, limit: number): Promise<GameResult[]> {
+  const files = await getMediaFireFolderFiles(source.folderKey!);
+  return getUniqueGameTitles(files).slice(0, limit).map(f => ({
+    title: f.gameTitle,
+    url: `${source.baseUrl}?title=${encodeURIComponent(f.gameTitle)}`,
+    imageUrl: undefined,
+    sourceId: source.id
+  }));
+}
+
 export async function getLatestGames(): Promise<GameResult[]> {
   const sources = getEnabledSources();
   const allResults = await Promise.all(sources.map(source => {
+    if (source.type === 'mediafire-folder' && source.folderKey) {
+      return getMediaFireGameList(source, 16);
+    }
     return scrapeGameList(`${source.baseUrl}${source.paths.latest}`, source, 16);
   }));
   return allResults.flat();
@@ -73,6 +90,9 @@ export async function getLatestGames(): Promise<GameResult[]> {
 export async function getPopularGames(): Promise<GameResult[]> {
   const sources = getEnabledSources();
   const allResults = await Promise.all(sources.map(source => {
+    if (source.type === 'mediafire-folder' && source.folderKey) {
+      return getMediaFireGameList(source, 16);
+    }
     return scrapeGameList(`${source.baseUrl}${source.paths.popular}`, source, 16);
   }));
   return allResults.flat();
@@ -81,6 +101,20 @@ export async function getPopularGames(): Promise<GameResult[]> {
 export async function searchForGame(query: string): Promise<GameResult[]> {
   const sources = getEnabledSources();
   const allResults = await Promise.all(sources.map(async source => {
+    if (source.type === 'mediafire-folder' && source.folderKey) {
+      try {
+        const matchingFiles = await searchMediaFireFiles(source.folderKey, query);
+        return getUniqueGameTitles(matchingFiles).map(f => ({
+          title: f.gameTitle,
+          url: `${source.baseUrl}?title=${encodeURIComponent(f.gameTitle)}`,
+          imageUrl: undefined,
+          sourceId: source.id
+        }));
+      } catch (err) {
+        console.error(`Error searching MediaFire source ${source.name}:`, err);
+        return [];
+      }
+    }
     try {
       const searchUrl = `${source.baseUrl}${source.paths.search}${encodeURIComponent(query)}`;
       const response = await axios.get(searchUrl);
@@ -129,6 +163,28 @@ export async function getDownloadOptions(gameUrl: string, gameTitle?: string): P
     else throw new Error('Could not find matching source for URL: ' + gameUrl);
   }
 
+  // Handle MediaFire folder sources directly via API
+  if (source.type === 'mediafire-folder' && source.folderKey) {
+    try {
+      const titleParam = (() => {
+        try { return new URL(gameUrl).searchParams.get('title') || gameTitle || ''; }
+        catch { return gameTitle || ''; }
+      })();
+      const files = await getFilesForGame(source.folderKey, titleParam);
+      const options: DownloadOption[] = files.map(f => ({
+        name: f.filename.replace(/\.zip$/i, ''),
+        url: `https://www.mediafire.com/file/${f.quickkey}/file`,
+        size: formatMediaFireSize(f.size),
+        format: detectSaveFormat(f.filename),
+        sourceId: source!.id
+      }));
+      return { options, coverUrl: undefined };
+    } catch (error) {
+      console.error('Error getting MediaFire download options:', error);
+      throw new Error('Failed to get MediaFire download options');
+    }
+  }
+
   try {
     const gameRes = await axios.get(gameUrl);
     const $game = cheerio.load(gameRes.data);
@@ -172,10 +228,12 @@ export async function getDownloadOptions(gameUrl: string, gameTitle?: string): P
     });
 
     const filtered = options.filter(opt => {
-      const isPdf = opt.format.includes('PDF') || opt.name.toLowerCase().endsWith('.pdf');
-      const isEpub = opt.format.includes('EPUB') || opt.name.toLowerCase().endsWith('.epub');
+      const nameLower = opt.name.toLowerCase();
+      const isPdf = opt.format.includes('PDF') || nameLower.endsWith('.pdf');
+      const isEpub = opt.format.includes('EPUB') || nameLower.endsWith('.epub');
       const isMod = opt.format.toUpperCase().includes('MOD') || /\bmod\b/i.test(opt.name);
-      return !isPdf && !isEpub && !isMod;
+      const isArchive = opt.format === 'RAR' || opt.format === 'ZIP' || nameLower.endsWith('.rar') || nameLower.endsWith('.zip');
+      return !isPdf && !isEpub && !isMod && !isArchive;
     });
 
     // Deduplicate options by name, size, and format to avoid redundant "Full version" entries
@@ -202,6 +260,27 @@ export async function getDownloadOptions(gameUrl: string, gameTitle?: string): P
       }
     }
 
+    // Append matching saves/mods from MediaFire folder sources
+    if (gameTitle) {
+      const mfSources = sources.filter(s => s.type === 'mediafire-folder' && s.folderKey && s.enabled);
+      for (const mfSource of mfSources) {
+        try {
+          const mfFiles = await getFilesForGame(mfSource.folderKey!, gameTitle);
+          for (const file of mfFiles) {
+            uniqueOptions.push({
+              name: file.filename.replace(/\.zip$/i, ''),
+              url: `https://www.mediafire.com/file/${file.quickkey}/file`,
+              size: formatMediaFireSize(file.size),
+              format: detectSaveFormat(file.filename),
+              sourceId: mfSource.id
+            });
+          }
+        } catch (err) {
+          console.error('Failed to fetch MediaFire saves for game:', err);
+        }
+      }
+    }
+
     return { options: uniqueOptions, coverUrl };
   } catch (error) {
     console.error('Error getting download options:', error);
@@ -214,6 +293,12 @@ export async function getDirectDownloadLink(optionUrl: string): Promise<string> 
   if (optionUrl.startsWith('https://raw.githubusercontent.com/') ||
       optionUrl.startsWith('https://github.com/Fl4sh9174/')) {
     return optionUrl;
+  }
+
+  // MediaFire file URLs — resolve via API then page scrape fallback
+  if (/mediafire\.com\/file\/[a-z0-9]+/i.test(optionUrl)) {
+    const quickkey = optionUrl.replace(/.*mediafire\.com\/file\//i, '').split('/')[0];
+    return getMediaFireDirectLink(quickkey);
   }
 
   const sources = getEnabledSources();

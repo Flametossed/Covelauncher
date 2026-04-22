@@ -7,6 +7,8 @@ export interface SourceConfig {
   name: string;
   baseUrl: string;
   enabled: boolean;
+  type?: string;
+  folderKey?: string;
   selectors: {
     gameList: string;
     gameTitle: string;

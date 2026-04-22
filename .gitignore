@@ -11,4 +11,4 @@ build
 asar_contents.txt
 build_error.txt
 build_output.txt
-NSWPedia-source.json
+*-source.json

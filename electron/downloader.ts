@@ -113,12 +113,12 @@ export async function downloadFile(
       if (contentDisposition) {
         const match = contentDisposition.match(/filename="?(.+?)"?$/);
         if (match && match[1]) {
-          fileName = match[1];
+          fileName = decodeURIComponent(match[1]);
         }
       } else {
         // Fallback to URL path
         const urlObj = new URL(url);
-        fileName = path.basename(urlObj.pathname) || fileName;
+        fileName = decodeURIComponent(path.basename(urlObj.pathname)) || fileName;
       }
 
       const totalSize = parseInt(String(response.headers['content-length'] || '0'), 10);
