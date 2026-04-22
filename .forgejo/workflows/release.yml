@@ -6,119 +6,74 @@ on:
       - 'v*'
 
 jobs:
-  build-linux:
+  release:
     runs-on: codeberg-medium-lazy
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: 'npm'
 
-      - name: Install project dependencies
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends squashfs-tools jq
+
+      - name: Install npm dependencies
         run: npm ci
 
-      - name: Build frontend and electron
+      - name: Build app
         run: npm run build
 
       - name: Build Linux packages
         run: npx electron-builder --linux AppImage tar.gz --publish never
 
-      - name: Upload Linux artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-artifacts
-          path: |
-            release/*.AppImage
-            release/*.tar.gz
-          retention-days: 1
-
-  build-windows:
-    runs-on: codeberg-medium-lazy
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: 'npm'
-
-      - name: Install wine for Windows cross-build
-        run: |
-          sudo dpkg --add-architecture i386
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends wine wine32:i386 xvfb
-          Xvfb :99 -screen 0 1024x768x24 &
-          echo "DISPLAY=:99" >> $GITHUB_ENV
-
-      - name: Install project dependencies
-        run: npm ci
-
-      - name: Build frontend and electron
-        run: npm run build
-
       - name: Build Windows package
         run: npx electron-builder --win portable --publish never
 
-      - name: Upload Windows artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-artifacts
-          path: release/*.exe
-          retention-days: 1
+      - name: List artifacts
+        run: ls -la release/
 
-  release:
-    needs: [build-linux, build-windows]
-    runs-on: codeberg-tiny
-    steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: Create Release and Upload Assets
+      - name: Publish release
+        env:
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          REPO: ${{ github.repository }}
         run: |
+          set -e
           TAG=${GITHUB_REF#refs/tags/}
 
-          RELEASE_RESPONSE=$(curl -s -X POST \
-            -H "Authorization: token ${{ secrets.RELEASE_TOKEN }}" \
+          BODY=$(jq -rn \
+            --arg tag "$TAG" \
+            --arg name "CoveLauncher $TAG" \
+            --arg body "## CoveLauncher $TAG\n\nA modern, lightweight Game Library Manager.\n\n### Downloads\n- **Windows**: Download the \`.exe\` file (portable — no installation needed)\n- **Linux AppImage**: Download the \`.AppImage\` file, then \`chmod +x\` and run\n- **Linux tar.gz**: Download and extract, then run the \`covelauncher\` binary" \
+            '{tag_name: $tag, name: $name, body: $body, draft: false, prerelease: false}')
+
+          RESPONSE=$(curl -sf -X POST \
+            -H "Authorization: token ${RELEASE_TOKEN}" \
             -H "Content-Type: application/json" \
-            -d "{
-              \"tag_name\": \"${TAG}\",
-              \"name\": \"CoveLauncher ${TAG}\",
-              \"body\": \"## CoveLauncher ${TAG}\n\nA modern, lightweight Game Library Manager.\n\n### Downloads\n- **Windows**: Download the \`.exe\` file (portable — no installation needed)\n- **Linux AppImage**: Download the \`.AppImage\` file, then \`chmod +x\` and run\n- **Linux tar.gz**: Download and extract, then run the \`covelauncher\` binary\",
-              \"draft\": false,
-              \"prerelease\": false
-            }" \
-            "https://codeberg.org/api/v1/repos/${{ github.repository }}/releases")
+            -d "$BODY" \
+            "https://codeberg.org/api/v1/repos/${REPO}/releases")
 
-          RELEASE_ID=$(echo "$RELEASE_RESPONSE" | jq -r '.id')
-          echo "Created release ID: $RELEASE_ID"
-
-          if [ "$RELEASE_ID" = "null" ] || [ -z "$RELEASE_ID" ]; then
-            echo "Failed to create release!"
-            echo "$RELEASE_RESPONSE"
+          RELEASE_ID=$(echo "$RESPONSE" | jq -r '.id')
+          if [ -z "$RELEASE_ID" ] || [ "$RELEASE_ID" = "null" ]; then
+            echo "Release creation failed:"
+            echo "$RESPONSE"
             exit 1
           fi
+          echo "Release created: $RELEASE_ID"
 
-          for file in artifacts/**/*.exe artifacts/**/*.AppImage artifacts/**/*.tar.gz; do
-            if [ -f "$file" ]; then
-              FILENAME=$(basename "$file")
-              echo "Uploading: $FILENAME"
-              curl -s -X POST \
-                -H "Authorization: token ${{ secrets.RELEASE_TOKEN }}" \
-                -H "Content-Type: application/octet-stream" \
-                --data-binary "@$file" \
-                "https://codeberg.org/api/v1/repos/${{ github.repository }}/releases/${RELEASE_ID}/assets?name=$(echo $FILENAME | sed 's/ /%20/g')"
-              echo "  Uploaded $FILENAME"
-            fi
+          for file in release/*.exe release/*.AppImage release/*.tar.gz; do
+            [ -f "$file" ] || continue
+            FILENAME=$(basename "$file")
+            ENCODED=$(python3 -c "import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1]))" "$FILENAME")
+            echo "Uploading: $FILENAME"
+            curl -sf -X POST \
+              -H "Authorization: token ${RELEASE_TOKEN}" \
+              -H "Content-Type: application/octet-stream" \
+              --data-binary "@$file" \
+              "https://codeberg.org/api/v1/repos/${REPO}/releases/${RELEASE_ID}/assets?name=${ENCODED}"
+            echo "Uploaded: $FILENAME"
           done
