@@ -95,6 +95,18 @@ export function saveConfig(config: AppConfig): void {
   }
 }
 
+export function clearConfig(): void {
+  const configPath = getConfigPath();
+  try {
+    if (fs.existsSync(configPath)) {
+      fs.unlinkSync(configPath);
+    }
+  } catch (err) {
+    console.error('Error clearing config:', err);
+    throw err;
+  }
+}
+
 export function addSource(source: SourceConfig): AppConfig {
   const config = loadConfig();
   const existing = config.sources.findIndex(s => s.id === source.id);

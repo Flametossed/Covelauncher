@@ -4,7 +4,7 @@ import fs from 'fs';
 import { spawn } from 'child_process';
 import { searchForGame, getDownloadOptions, getDirectDownloadLink, fetchImageAsBase64, getLatestGames, getPopularGames } from './scraper';
 import { downloadFile, cancelDownload, pauseDownload, resumeDownload } from './downloader';
-import { loadConfig, saveConfig, addSource, removeSource, addEmulator, removeEmulator, addFirmwareSource, removeFirmwareSource, AppConfig, SourceConfig, EmulatorConfig, FirmwareSource } from './sources';
+import { loadConfig, saveConfig, clearConfig, addSource, removeSource, addEmulator, removeEmulator, addFirmwareSource, removeFirmwareSource, AppConfig, SourceConfig, EmulatorConfig, FirmwareSource } from './sources';
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -171,6 +171,11 @@ ipcMain.handle('get-config', async () => {
 
 ipcMain.handle('save-config', async (_event, config: AppConfig) => {
   saveConfig(config);
+  return loadConfig();
+});
+
+ipcMain.handle('clear-config', async () => {
+  clearConfig();
   return loadConfig();
 });
 

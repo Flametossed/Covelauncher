@@ -25,6 +25,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Config/Sources management
   getConfig:                  ()              => ipcRenderer.invoke('get-config'),
   saveConfig:                 (config: any)   => ipcRenderer.invoke('save-config', config),
+  clearConfig:                ()              => ipcRenderer.invoke('clear-config'),
   addSource:                  (source: any)   => ipcRenderer.invoke('add-source', source),
   removeSource:               (id: string)    => ipcRenderer.invoke('remove-source', id),
   // Emulator management

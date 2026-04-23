@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
   Search, Download, Folder, FolderOpen, Play, RefreshCw, HardDrive,
   Settings, Pause, Square, X, RotateCcw, Trash2, ImageOff, CheckCircle,
-  Moon, Sun, Plus, Cpu, Database, LayoutGrid, LayoutList
+  Moon, Sun, Plus, Cpu, Database, LayoutGrid, LayoutList, ChevronDown
 } from 'lucide-react';
 
 interface GameResult {
@@ -401,6 +401,54 @@ function App() {
     d => d.status === 'downloading' || d.status === 'paused' || d.status === 'extracting'
   ).length;
 
+  // ─── Mouse side-button navigation ───────────────────────────────────────────
+  type NavSnap = { activeView: ActiveView; selectedGame: GameResult | null; hasSearched: boolean };
+  const navHistoryRef  = React.useRef<NavSnap[]>([]);
+  const navFutureRef   = React.useRef<NavSnap[]>([]);
+  const isNavJumpRef   = React.useRef(false);
+  const isMountedRef   = React.useRef(false);
+
+  useEffect(() => {
+    if (!isMountedRef.current) { isMountedRef.current = true; return; }
+    if (isNavJumpRef.current)  { isNavJumpRef.current = false; return; }
+    navFutureRef.current = [];
+  }, [activeView, selectedGame, hasSearched]);
+
+  const goBack = React.useCallback(() => {
+    if (navHistoryRef.current.length === 0) return;
+    const prev = navHistoryRef.current.pop()!;
+    navFutureRef.current.push({ activeView, selectedGame, hasSearched });
+    isNavJumpRef.current = true;
+    setActiveView(prev.activeView);
+    setSelectedGame(prev.selectedGame);
+    setHasSearched(prev.hasSearched);
+  }, [activeView, selectedGame, hasSearched]);
+
+  const goForward = React.useCallback(() => {
+    if (navFutureRef.current.length === 0) return;
+    const next = navFutureRef.current.pop()!;
+    navHistoryRef.current.push({ activeView, selectedGame, hasSearched });
+    isNavJumpRef.current = true;
+    setActiveView(next.activeView);
+    setSelectedGame(next.selectedGame);
+    setHasSearched(next.hasSearched);
+  }, [activeView, selectedGame, hasSearched]);
+
+  useEffect(() => {
+    const onMouse = (e: MouseEvent) => {
+      if (e.button === 3) { e.preventDefault(); goBack(); }
+      if (e.button === 4) { e.preventDefault(); goForward(); }
+    };
+    window.addEventListener('mousedown', onMouse);
+    return () => window.removeEventListener('mousedown', onMouse);
+  }, [goBack, goForward]);
+
+  // Push to history before any navigation action
+  const pushNav = React.useCallback(() => {
+    navHistoryRef.current.push({ activeView, selectedGame, hasSearched });
+    navFutureRef.current = [];
+  }, [activeView, selectedGame, hasSearched]);
+
   useEffect(() => {
     if (window.electronAPI) {
       window.electronAPI.onDownloadProgress((data: DownloadProgress) => {
@@ -471,6 +519,7 @@ function App() {
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!query.trim() || !window.electronAPI) return;
+    pushNav();
     setLoading(true);
     setError('');
     setHasSearched(true);
@@ -489,6 +538,7 @@ function App() {
   };
 
   const handleSelectGame = async (game: GameResult) => {
+    pushNav();
     setSelectedGame(game);
     setCoverUrl(game.imageUrl); // Show thumbnail immediately while full cover loads
     setOptionsLoading(true);
@@ -930,6 +980,45 @@ function App() {
   const StorePage = () => {
     const hasEnabledSources = appConfig.sources.some(s => s.enabled);
     const scrollRef = React.useRef<HTMLDivElement>(null);
+    const SPECIAL_FORMATS = ['SAVE', 'MOD', 'BCAT', 'LANGPACK'];
+    const [openGroups, setOpenGroups] = React.useState<Record<string, boolean>>({});
+
+    const getEffectiveFormat = (opt: DownloadOption): string => {
+      const name = opt.name.toLowerCase();
+      if (name.endsWith('.xci')) return 'XCI';
+      if (name.endsWith('.nsp')) return 'NSP';
+      if (name.endsWith('.nro')) return 'NRO';
+      return opt.format;
+    };
+
+    const _optNameSeen: Record<string, number> = {};
+    const optDisplayNames = options.map(opt => {
+      const n = _optNameSeen[opt.name] || 0;
+      _optNameSeen[opt.name] = n + 1;
+      return n > 0 ? `${opt.name} (Mirror)` : opt.name;
+    });
+
+    const regularOpts = options.map((opt, i) => ({ opt, displayName: optDisplayNames[i] }))
+      .filter(({ opt }) => !SPECIAL_FORMATS.includes(opt.format.toUpperCase()))
+      .sort((a, b) => {
+        const rank = ({ opt }: { opt: DownloadOption }) => {
+          const fmt = getEffectiveFormat(opt).toUpperCase();
+          const name = opt.name.toUpperCase();
+          if (fmt.includes('XCI')) return 0;
+          if (fmt.includes('DLC') || name.includes('DLC')) return 2;
+          return 1;
+        };
+        return rank(a) - rank(b);
+      });
+
+    const specialGroupMap: Record<string, Array<{ opt: DownloadOption; displayName: string }>> = {};
+    options.forEach((opt, i) => {
+      const fmt = opt.format.toUpperCase();
+      if (SPECIAL_FORMATS.includes(fmt)) {
+        if (!specialGroupMap[fmt]) specialGroupMap[fmt] = [];
+        specialGroupMap[fmt].push({ opt, displayName: optDisplayNames[i] });
+      }
+    });
 
     React.useEffect(() => {
       scrollRef.current?.scrollTo({ top: 0 });
@@ -1062,7 +1151,7 @@ function App() {
                   <h3 className="text-lg font-semibold text-slate-300 mb-2 border-b border-slate-700 pb-2">
                     Available Downloads
                   </h3>
-                  {options.map((opt, i) => {
+                  {regularOpts.map(({ opt, displayName }, i) => {
                     const alreadyDownloaded = downloadedNames.has(opt.url);
                     return (
                     <div key={i} className={`flex flex-col sm:flex-row items-start sm:items-center justify-between p-4
@@ -1074,14 +1163,14 @@ function App() {
                       <div className="flex-1">
                         <div className="flex items-center gap-2 mb-1">
                           {alreadyDownloaded && <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0" />}
-                          <div className="font-medium text-slate-200">{opt.name}</div>
+                          <div className="font-medium text-slate-200">{displayName}</div>
                         </div>
                         <div className="flex items-center gap-3 text-xs font-semibold">
                           <span className={`px-2 py-1 rounded bg-slate-800 border ${
-                            opt.format.includes('NSP') ? 'border-blue-500/30 text-blue-400' :
-                            opt.format.includes('XCI') ? 'border-purple-500/30 text-purple-400' :
+                            getEffectiveFormat(opt).includes('NSP') ? 'border-blue-500/30 text-blue-400' :
+                            getEffectiveFormat(opt).includes('XCI') ? 'border-purple-500/30 text-purple-400' :
                             'border-slate-600 text-slate-400'
-                          }`}>{opt.format}</span>
+                          }`}>{getEffectiveFormat(opt)}</span>
                           <span className="text-slate-400 bg-slate-800 px-2 py-1 rounded">
                             Size: {opt.size}
                           </span>
@@ -1098,6 +1187,57 @@ function App() {
                     </div>
                     );
                   })}
+                  {Object.entries(specialGroupMap).map(([fmt, items]) => (
+                    <div key={fmt} className="border border-slate-700/50 rounded-xl overflow-hidden">
+                      <button
+                        onClick={() => setOpenGroups(prev => ({ ...prev, [fmt]: !prev[fmt] }))}
+                        className="w-full flex items-center justify-between px-4 py-3 bg-slate-800/80 hover:bg-slate-800 transition-colors text-sm font-semibold text-slate-300"
+                      >
+                        <span>{fmt} <span className="font-normal text-slate-500">({items.length})</span></span>
+                        <ChevronDown className={`w-4 h-4 transition-transform ${openGroups[fmt] ? 'rotate-180' : ''}`} />
+                      </button>
+                      {openGroups[fmt] && (
+                        <div className="flex flex-col gap-2 p-3 bg-slate-900/30">
+                          {items.map(({ opt, displayName }, i) => {
+                            const alreadyDownloaded = downloadedNames.has(opt.url);
+                            return (
+                            <div key={i} className={`flex flex-col sm:flex-row items-start sm:items-center justify-between p-4
+                                                    border rounded-xl transition-colors gap-4 ${
+                                                      alreadyDownloaded
+                                                        ? 'bg-emerald-500/5 border-emerald-500/20 hover:bg-emerald-500/10'
+                                                        : 'bg-slate-900/50 border-slate-700/50 hover:bg-slate-800'
+                                                    }`}>
+                              <div className="flex-1">
+                                <div className="flex items-center gap-2 mb-1">
+                                  {alreadyDownloaded && <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0" />}
+                                  <div className="font-medium text-slate-200">{displayName}</div>
+                                </div>
+                                <div className="flex items-center gap-3 text-xs font-semibold">
+                                  <span className={`px-2 py-1 rounded bg-slate-800 border ${
+                                    getEffectiveFormat(opt).includes('NSP') ? 'border-blue-500/30 text-blue-400' :
+                                    getEffectiveFormat(opt).includes('XCI') ? 'border-purple-500/30 text-purple-400' :
+                                    'border-slate-600 text-slate-400'
+                                  }`}>{getEffectiveFormat(opt)}</span>
+                                  <span className="text-slate-400 bg-slate-800 px-2 py-1 rounded">
+                                    Size: {opt.size}
+                                  </span>
+                                  {alreadyDownloaded && (
+                                    <span className="text-emerald-400 bg-emerald-500/10 px-2 py-1 rounded">Downloaded</span>
+                                  )}
+                                </div>
+                              </div>
+                              <button onClick={() => handleDownload(opt)}
+                                className="shrink-0 bg-blue-600 hover:bg-blue-500 text-white px-5 py-2 rounded-lg
+                                           font-medium transition-colors flex items-center gap-2">
+                                <Download className="w-4 h-4" /> Download
+                              </button>
+                            </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  ))}
                 </div>
               ) : (
                 <div className="text-slate-400 py-4">No direct download links found.</div>
@@ -1418,6 +1558,36 @@ function App() {
           </div>
         </section>
 
+        {/* Data / Cache section */}
+        <section className="bg-slate-800/60 border border-slate-700/60 rounded-2xl overflow-hidden">
+          <div className="px-6 py-4 border-b border-slate-700/60">
+            <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-widest">Data</h3>
+          </div>
+          <div className="p-6 flex flex-col gap-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-sm font-semibold text-slate-300">Clear Cache</div>
+                <div className="text-xs text-slate-500 mt-0.5">
+                  Removes sources.json from AppData — resets all sources, emulators, and firmware
+                </div>
+              </div>
+              <button
+                onClick={async () => {
+                  if (!window.confirm('This will remove sources.json and reset all sources, emulators, and firmware. Continue?')) return;
+                  if (window.electronAPI) {
+                    await window.electronAPI.clearConfig();
+                    const newConfig = await window.electronAPI.getConfig();
+                    setAppConfig(newConfig);
+                  }
+                }}
+                className="shrink-0 bg-red-500/20 hover:bg-red-500/40 text-red-400 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+              >
+                Clear Cache
+              </button>
+            </div>
+          </div>
+        </section>
+
         {/* Save */}
         <div className="flex items-center justify-end gap-3">
           {saved && (
@@ -1448,21 +1618,21 @@ function App() {
         </div>
 
         <nav className="flex-1 min-h-0 overflow-y-auto px-4 space-y-1">
-          <button onClick={() => setActiveView('store')}
+          <button onClick={() => { pushNav(); setActiveView('store'); }}
             className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-left ${
               activeView === 'store' ? 'text-slate-50 bg-slate-800' : 'text-slate-400 hover:text-slate-50 hover:bg-slate-800/50'
             }`}>
             <Search className="w-5 h-5 shrink-0" /> Catalogue
           </button>
 
-          <button onClick={() => setActiveView('library')}
+          <button onClick={() => { pushNav(); setActiveView('library'); }}
             className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-left ${
               activeView === 'library' ? 'text-slate-50 bg-slate-800' : 'text-slate-400 hover:text-slate-50 hover:bg-slate-800/50'
             }`}>
             <Folder className="w-5 h-5 shrink-0" /> Library
           </button>
 
-          <button onClick={() => setActiveView('downloads')}
+          <button onClick={() => { pushNav(); setActiveView('downloads'); }}
             className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-left ${
               activeView === 'downloads' ? 'text-slate-50 bg-slate-800' : 'text-slate-400 hover:text-slate-50 hover:bg-slate-800/50'
             }`}>
@@ -1474,7 +1644,7 @@ function App() {
             )}
           </button>
 
-          <button onClick={() => setActiveView('firmware')}
+          <button onClick={() => { pushNav(); setActiveView('firmware'); }}
             className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-left ${
               activeView === 'firmware' ? 'text-slate-50 bg-slate-800' : 'text-slate-400 hover:text-slate-50 hover:bg-slate-800/50'
             }`}>
@@ -1493,7 +1663,7 @@ function App() {
             </div>
           </div>
           <div
-            onClick={() => setActiveView('settings')}
+            onClick={() => { pushNav(); setActiveView('settings'); }}
             className={`p-4 text-sm flex items-center gap-2 cursor-pointer transition-colors ${
               activeView === 'settings' ? 'text-slate-50 bg-slate-800/60' : 'text-slate-500 hover:text-slate-300'
             }`}
