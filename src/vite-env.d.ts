@@ -20,6 +20,7 @@ interface ElectronAPI {
   // Config/Sources management
   getConfig:                      ()                 => Promise<any>;
   saveConfig:                     (config: any)      => Promise<any>;
+  clearConfig:                    ()                 => Promise<any>;
   addSource:                      (source: any)      => Promise<any>;
   removeSource:                   (id: string)       => Promise<any>;
   // Emulator management
