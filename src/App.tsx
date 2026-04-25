@@ -392,7 +392,7 @@ function App() {
   );
 
   const [appConfig, setAppConfig] = useState<AppConfig>({ sources: [], emulators: [] });
-  const [selectedEmulator, setSelectedEmulator] = useState<string>(
+  const [selectedEmulator] = useState<string>(
     () => localStorage.getItem('selectedEmulator') || ''
   );
 
