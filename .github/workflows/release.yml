@@ -4,6 +4,11 @@ on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to upload to (e.g. v1.0.0)'
+        required: true
+        default: ''
 
 jobs:
   build:
@@ -29,12 +34,22 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Determine release tag
+        id: get_tag
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            echo "TAG=${{ github.event.release.tag_name }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "TAG=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Upload artifacts to release (Windows)
         if: matrix.os == 'windows-latest'
         uses: softprops/action-gh-release@v2
         with:
           files: release/*.exe
-          tag_name: ${{ github.event.release.tag_name }}
+          tag_name: ${{ steps.get_tag.outputs.TAG }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -43,6 +58,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: release/*.AppImage
-          tag_name: ${{ github.event.release.tag_name }}
+          tag_name: ${{ steps.get_tag.outputs.TAG }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
