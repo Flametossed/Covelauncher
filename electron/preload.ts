@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getLibrary:                 (dir: string)   => ipcRenderer.invoke('get-library', dir),
   openInExplorer:             (path: string)  => ipcRenderer.invoke('open-in-explorer', path),
   deleteLibraryItem:          (path: string)  => ipcRenderer.invoke('delete-library-item', path),
+  getDefaultDownloadDir:      ()              => ipcRenderer.invoke('get-default-download-dir'),
   selectDirectory:            ()              => ipcRenderer.invoke('select-directory'),
   onDownloadProgress: (callback: (data: any) => void) => {
     ipcRenderer.on('download-progress', (_event, data) => callback(data));

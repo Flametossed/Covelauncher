@@ -14,6 +14,7 @@ interface ElectronAPI {
   getLibrary:                     (dir: string)      => Promise<any[]>;
   openInExplorer:                 (path: string)     => Promise<void>;
   deleteLibraryItem:              (path: string)     => Promise<boolean>;
+  getDefaultDownloadDir:          ()                 => Promise<string>;
   selectDirectory:                ()                 => Promise<string | null>;
   onDownloadProgress:             (callback: (data: any) => void) => void;
   removeDownloadProgressListener: ()                 => void;

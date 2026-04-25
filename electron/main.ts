@@ -150,6 +150,10 @@ ipcMain.handle('delete-library-item', async (_event, targetPath: string) => {
   }
 });
 
+ipcMain.handle('get-default-download-dir', () => {
+  return path.join(app.getPath('downloads'), 'Covedownloader', 'ROMS');
+});
+
 ipcMain.handle('select-directory', async () => {
   if (!mainWindow) return null;
   const result = await dialog.showOpenDialog(mainWindow, {

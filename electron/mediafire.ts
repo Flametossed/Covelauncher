@@ -9,9 +9,21 @@ export interface MediaFireFile {
 
 const folderCache = new Map<string, MediaFireFile[]>();
 
+const KNOWN_TYPE_TAG = /^\s*\[\s*(bcat|save|saves|mod|mods|dlc|upd|update|updates|patch|patches|langpack|languagepack|language\s*pack|sins|nx|switch|us|eu|jp|jpn|usa|europe|v\d[\w.]*)[^\]]*\]\s*/i;
+
 export function parseGameTitleFromFilename(filename: string): string {
-  const match = filename.match(/^([^\[]+)/);
-  return match ? match[1].trim() : filename.replace(/\.zip$/i, '').trim();
+  let s = filename.replace(/\.(zip|7z|rar|tar\.gz|tar|gz)$/i, '').trim();
+  // Strip ONLY leading brackets whose content looks like a type tag (BCAT, SAVE, region, version).
+  // Leave other leading brackets intact — they may contain the game name.
+  let prev: string;
+  do { prev = s; s = s.replace(KNOWN_TYPE_TAG, '').trim(); } while (s !== prev);
+  // If string still starts with a bracket, the bracket likely contains the game name itself.
+  if (s.startsWith('[')) {
+    const m = s.match(/^\[([^\]]+)\]/);
+    if (m) return m[1].trim();
+  }
+  const match = s.match(/^([^\[]+)/);
+  return (match ? match[1] : s).trim();
 }
 
 export function detectSaveFormat(filename: string): string {
@@ -32,7 +44,64 @@ export function formatMediaFireSize(size: string): string {
 }
 
 export function normalizeTitle(title: string): string {
-  return title.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
+  return title.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+// Common Switch / gaming abbreviations. Single-string entries are treated as
+// one phrase (all words required). Array entries are alternatives (any one is
+// enough) — useful for two-version games like Pokemon SV (Scarlet OR Violet).
+const ABBREVIATIONS: Record<string, string | string[]> = {
+  botw: 'breath of the wild',
+  totk: 'tears of the kingdom',
+  ss: 'skyward sword',
+  oot: 'ocarina of time',
+  mm: 'majoras mask',
+  ww: 'wind waker',
+  tp: 'twilight princess',
+  mk8: 'mario kart 8',
+  mkd: 'mario kart 8 deluxe',
+  ssbu: 'super smash bros ultimate',
+  ssb: 'super smash bros',
+  acnh: 'animal crossing new horizons',
+  smo: 'super mario odyssey',
+  pla: 'pokemon legends arceus',
+  loz: 'legend of zelda',
+  smtv: 'shin megami tensei 5',
+  smt: 'shin megami tensei',
+  bayo: 'bayonetta',
+  ff: 'final fantasy',
+  dq: 'dragon quest',
+  p5r: 'persona 5 royal',
+  p5: 'persona 5',
+  xc: 'xenoblade chronicles',
+  xc2: 'xenoblade chronicles 2',
+  xc3: 'xenoblade chronicles 3',
+  re: 'resident evil',
+  // OR-alternatives: file represents any one of these versions
+  swsh: ['sword', 'shield'],
+  sv: ['scarlet', 'violet'],
+  bdsp: ['brilliant diamond', 'shining pearl'],
+  lgpe: ['lets go pikachu', 'lets go eevee'],
+};
+
+// Expand all abbreviations in text into the cartesian product of variants.
+// Single-string entries inline their words; array entries fork into branches.
+export function expandToVariants(text: string): string[] {
+  let variants: string[][] = [[]];
+  for (const tok of text.split(' ')) {
+    const exp = ABBREVIATIONS[tok];
+    if (exp === undefined) {
+      variants = variants.map(v => [...v, tok]);
+    } else {
+      const alts = Array.isArray(exp) ? exp : [exp];
+      const next: string[][] = [];
+      for (const v of variants) {
+        for (const alt of alts) next.push([...v, ...alt.split(' ')]);
+      }
+      variants = next;
+    }
+  }
+  return variants.map(v => v.join(' '));
 }
 
 export async function getMediaFireFolderFiles(folderKey: string): Promise<MediaFireFile[]> {
@@ -98,9 +167,23 @@ export async function searchMediaFireFiles(folderKey: string, query: string): Pr
 export async function getFilesForGame(folderKey: string, gameTitle: string): Promise<MediaFireFile[]> {
   const files = await getMediaFireFolderFiles(folderKey);
   const q = normalizeTitle(gameTitle);
+  if (q.length < 3) return [];
+  // Combine words from every q-variant into one allow-set: a file token only
+  // needs to appear in *some* spelling of the game title.
+  const qWords = new Set<string>();
+  for (const v of expandToVariants(q)) for (const w of v.split(' ')) qWords.add(w);
   return files.filter(f => {
     const t = normalizeTitle(f.gameTitle);
-    return t.startsWith(q) || q.startsWith(t) || t === q;
+    if (t.length < 3) return false;
+    if (t === q) return true;
+    if (t.startsWith(q) || q.startsWith(t)) return true;
+    // Token-subset across t-variants: file matches if any expansion has all its
+    // (>=3 char) words present in the game title's allowed word set.
+    for (const variant of expandToVariants(t)) {
+      const tWords = variant.split(' ').filter(w => w.length >= 3);
+      if (tWords.length > 0 && tWords.every(w => qWords.has(w))) return true;
+    }
+    return false;
   });
 }
 
